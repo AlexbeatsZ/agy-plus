@@ -71,6 +71,20 @@ function buildRelease(args) {
     assert.match(archInfo, /Mach-O/, "Release must be a macOS Mach-O executable");
     renameSync(candidate, destination);
 
+    // 旧版 Tauri bundle 会被 Spotlight 优先索引,构建时一并清理
+    rmSync(path.join(projectRoot, "target/release/bundle"), { recursive: true, force: true });
+    const wrapperApp = path.join(projectRoot, "macos/AGY Plus.app");
+    run("/usr/bin/codesign", [
+      "--force",
+      "--timestamp=none",
+      "--identifier",
+      "com.alexbeatsz.agy-plus.app",
+      "--sign",
+      process.env.AGY_PLUS_SIGN_IDENTITY || "Local Development Code Signing",
+      wrapperApp,
+    ]);
+    run("/usr/bin/codesign", ["--verify", "--strict", wrapperApp]);
+
     const portableDir = path.join(projectRoot, "target/portable");
     mkdirSync(portableDir, { recursive: true });
     const archive = path.join(portableDir, `agy-plus-${version}-macos-arm64.tar.gz`);
