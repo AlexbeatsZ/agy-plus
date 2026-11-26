@@ -1,0 +1,15 @@
+#!/bin/bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
+BIN="$ROOT/target/release/agy-plus"
+LOG="$HOME/Library/Logs/agy-plus-manual.log"
+
+if [[ ! -x "$BIN" ]]; then
+  /usr/bin/osascript -e 'display alert "AGY Plus" message "Missing target/release/agy-plus. Run bash macos/release.sh first." as critical'
+  exit 1
+fi
+
+bash "$ROOT/macos/sign.sh" "$BIN" >>"$LOG" 2>&1 || true
+/usr/bin/nohup "$BIN" >>"$LOG" 2>&1 </dev/null &
+exit 0

@@ -1,4 +1,5 @@
-//! Bounded subprocess helpers for registry/keychain probes that must not hang UI.
+//! Bounded subprocess helpers for keychain/system probes that must never hang.
+#![cfg_attr(windows, allow(dead_code))]
 
 use std::io::{self, Read, Write};
 use std::process::{Command, Output, Stdio};
@@ -7,16 +8,11 @@ use std::time::{Duration, Instant};
 
 /// Run `command` and wait up to `timeout`. On timeout, kill the child and return
 /// `io::ErrorKind::TimedOut`.
-///
-/// The wall-clock bound covers both process lifetime and stdout/stderr drain.
-/// If a descendant holds an inherited pipe after the parent exits, join is aborted
-/// when `timeout` elapses (reader threads are detached).
 pub fn output_with_timeout(command: &mut Command, timeout: Duration) -> io::Result<Output> {
     output_with_optional_input_timeout(command, None, timeout)
 }
 
-/// Like `output_with_timeout`, but send input to stdin and close it on completion.
-/// The input writer shares the same deadline and cannot block process monitoring.
+/// Like `output_with_timeout`, but write `input` to stdin before closing it.
 #[cfg(target_os = "linux")]
 pub fn output_with_input_timeout(
     command: &mut Command,
@@ -42,12 +38,11 @@ fn output_with_optional_input_timeout(
 
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
+        use std::os::windows::process::CommandExt as _;
+        command.creation_flags(0x0800_0000);
     }
 
-    let child = command.spawn();
-    let mut child = child?;
+    let mut child = command.spawn()?;
     let stdin_writer = input.and_then(|input| {
         child
             .stdin
@@ -75,14 +70,12 @@ fn output_with_optional_input_timeout(
                 if Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
-                    // Do not join readers on the kill path: a surviving descendant may
-                    // still hold an inherited pipe, and the timeout path must stay bounded.
                     drop(stdout_reader);
                     drop(stderr_reader);
                     drop(stdin_writer);
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
-                        format!("process timed out after {:?}", timeout),
+                        format!("process timed out after {timeout:?}"),
                     ));
                 }
                 std::thread::sleep(Duration::from_millis(20));
@@ -120,11 +113,9 @@ fn join_with_deadline<T: Default>(
         if handle.is_finished() {
             return handle
                 .join()
-                .map_err(|_| io::Error::new(io::ErrorKind::Other, "process pipe worker panicked"))?
-                .map_err(|error| error);
+                .map_err(|_| io::Error::other("process pipe worker panicked"))?;
         }
         if Instant::now() >= deadline {
-            // Detach the reader thread; it will exit when the pipe is eventually closed.
             drop(handle);
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,

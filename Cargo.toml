@@ -1,6 +1,43 @@
-[workspace]
-members = ["src-tauri"]
-resolver = "2"
+[package]
+name = "agy-plus"
+version = "0.2.0"
+edition = "2021"
+license = "CC-BY-NC-SA-4.0"
+description = "CDP-injecting launcher and account switcher with Refresh Token login for Google Antigravity"
+
+[[bin]]
+name = "agy-plus"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+chrono = "0.4"
+dirs = "5"
+fs2 = "0.4"
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sysinfo = "0.33"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+tokio-tungstenite = "0.26"
+
+[dev-dependencies]
+wiremock = "0.6"
+
+[build-dependencies]
+winresource = "0.1"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_Threading",
+  "Win32_UI_WindowsAndMessaging",
+] }
 
 [profile.release]
 strip = true
