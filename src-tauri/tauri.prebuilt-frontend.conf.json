@@ -1,5 +1,0 @@
-{
-  "build": {
-    "beforeBuildCommand": "node scripts/prepare-tauri.cjs"
-  }
-}

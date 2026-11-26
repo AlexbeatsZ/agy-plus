@@ -5,3 +5,5 @@ This community edition is adapted from [Cockpit Tools v1.4.2](https://github.com
 Cockpit Tools Clean disables upstream promotional announcements and sponsor routes, removes sponsored defaults, referral parameters from built-in provider links, and promotional controls, and uses manual releases. The application has its own display name and identifier.
 
 The adaptation is distributed for noncommercial use under [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International](LICENSE). Material with its own license retains that license.
+
+AGY Plus RT-only edition by AlexbeatsZ retains and adapts the Antigravity credential writers and bounded subprocess helpers from the above edition. All unrelated account management, gateways, proxy integrations and platform modules have been removed.
