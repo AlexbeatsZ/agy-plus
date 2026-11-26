@@ -38,7 +38,18 @@ npm run build:mac
 
 产物为 `target/release/bundle/macos/AGY Plus.app`。脚本验证签名及 `certificate leaf`。本地证书签名未经过 Apple 公证，跨 Mac 分发需自行信任签名。
 
-Windows / Linux 源码路径保留，但需要在对应设备上构建和验收；Linux 依赖系统 WebKitGTK 与 libsecret-tools。
+## Windows x64 便携版
+
+解压 Windows ZIP 后运行 `agy-plus.exe`。需要系统已有 Microsoft Edge WebView2 Runtime。使用普通用户运行，以写入该用户的系统凭据和 agy 会话。无需安装到系统目录。
+
+```powershell
+npm ci
+npm run build:win
+```
+
+脚本自动进入已安装的 MSVC x64 Developer Shell，使用锁文件构建；输出 `target/portable/agy-plus-0.1.0-windows-x64.zip`。不会安装全局工具、改 PATH 或修改代理。构建版本未做 Authenticode 签名。
+
+Linux 源码路径保留，尚未构建验收；依赖系统 WebKitGTK 与 libsecret-tools。
 
 ## 来源
 
