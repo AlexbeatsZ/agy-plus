@@ -28,6 +28,8 @@
 - Antigravity 官方 `compositeTokenStorage` 同时更新系统凭据与 `~/.gemini/jetski-standalone-oauth-token`。macOS 常规读取优先读较新的有效 token 文件，仅在文件缺失或与界面邮箱不一致且非弹窗元数据检查确认 Keychain 存在时才读 Keychain，避免日常打开弹窗触发授权提示。
 - CLI 登录必须创建 `antigravity-cli/antigravity-oauth-token`，不能只更新桌面回退文件；多存储写入失败须报告部分成功或回滚。
 
+- 旧版 0.1.0 Tauri 构建会在 `target/release/bundle/macos/AGY Plus.app` 留下 `.app`，Spotlight/LaunchServices 会优先索引它而打开独立窗口旧版；重构后须删除该目录并 `lsregister -u` 注销，Mac 唯一入口为 `macos/AGY Plus.app`（`com.alexbeatsz.agy-plus.app`）。
+
 # Docs Index
 
 - `docs/design/cdp-inject.md`：CDP 注入架构、数据目录、凭据同步协议与页面注入点设计。
