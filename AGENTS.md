@@ -8,13 +8,14 @@
 - 支持多窗口 CDP watchdog（默认端口 `9239`，`AddrInUse` 有界重试后回退动态端口；`Page.enable` + `Page.addScriptToEvaluateOnNewDocument` + 15s 校验 renderer/observer/bridge 健康的自恢复心跳）、本地账号库（统一管理官方 Google OAuth 与 RT 登录过的账号，按 `id_token` `sub` 去重）、账号切换与新增 Google 登录重启事务（失败自动回滚）。
 - 数据目录遵循平台规范（不写进仓库）：macOS `~/Library/Application Support/agy-plus`，Windows `%LOCALAPPDATA%\agy-plus`，Linux `~/.local/share/agy-plus`（测试可用 `AGY_PLUS_STATE_DIR` / `AGY_PLUS_HOME` / `AGY_PLUS_TEST_KEYRING_FILE` 隔离）。
 - 凭据写入仍同步三处：系统凭据（macOS Keychain `gemini`/`antigravity`、Windows Credential Manager `gemini:antigravity`、Linux `secret-tool`）、`~/.gemini/antigravity-cli/antigravity-oauth-token`、`~/.gemini/jetski-standalone-oauth-token`。
-- Mac（`/Users/meta/Developer/agy-plus`）：11 项 JS 测试、20 项 Rust 测试、arm64 固定证书签名构建（`Local Development Code Signing` / `com.alexbeatsz.agy-plus`，已验 `certificate leaf`）与隔离真实 Chromium/CDP 生命周期回归（连续导航、刷新后 bridge、脚本丢失重注入）通过；0.2.0 的刷新丢注入已对照复现。未安装 LaunchAgent。
-- ROG Windows（`C:\Users\Meta\source\repos\agy-plus`）：检测到官方 `Antigravity 2.29.0`（`%LOCALAPPDATA%\Programs\Antigravity\Antigravity.exe`）；8 项 JS 测试、16 项 Rust 测试、MSVC x64 release 构建（`agy-plus.exe` 0.2.0，`target/portable/agy-plus-0.2.0-windows-x64.zip`）与隔离实时 CDP 冒烟测试全部通过；未做 Authenticode 签名，未写入 `HKCU\...\Run`。
+- Mac（`/Users/meta/Developer/agy-plus`）：11 项 JS 测试、20 项 Rust 测试、arm64 固定证书签名构建（`Local Development Code Signing` / `com.alexbeatsz.agy-plus`，已验 `certificate leaf`）与隔离真实 Chromium/CDP 生命周期回归（连续导航、刷新后 bridge、脚本丢失重注入）通过；0.2.0 的刷新丢注入已对照复现。已重新附加现有 CDP 页面，renderer v2 与 bridge 健康；官方 Antigravity 未重启。未安装 LaunchAgent。
+- ROG Windows（`C:\Users\Meta\source\repos\agy-plus`）：检测到官方 `Antigravity 2.29.0`（`%LOCALAPPDATA%\Programs\Antigravity\Antigravity.exe`）；11 项 JS 测试、18 项 Rust 测试与 MSVC x64 release 构建（`agy-plus.exe` 0.2.1，`target/portable/agy-plus-0.2.1-windows-x64.zip`）通过；已在桌面会话重新附加现有 CDP 页面，renderer v2 与 bridge 健康，官方 Antigravity 未重启；未做 Authenticode 签名，未写入 `HKCU\...\Run`。
+
+- GitHub Release `v0.2.1` 已发布，含 macOS arm64 与 Windows x64 便携包。
 
 # Active Work
 
-- 0.2.1 Windows 构建、双端注入进程重新附加与 Release 发布进行中。
-- 用户显式启动新版 `agy-plus`（或安装自启接管）后，使用真实 Google/RT 账号完成官方 Antigravity 实机切换与目视验收。
+- 使用真实 Google/RT 账号完成官方 Antigravity 新增/切换与目视验收尚未执行；本次仅替换注入进程并读页面健康，未操作真实登录事务。
 - Linux 编译与实机验收未执行。
 
 # Build / Run / Test
