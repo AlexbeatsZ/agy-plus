@@ -20,6 +20,11 @@ function setupDom(bodyHtml, invoke, appConfig = {}) {
   dom.window.__APP_CONFIG__ = appConfig;
   dom.window.agyPlusInvoke = invoke;
   dom.window.eval(rendererScript);
+  const close = dom.window.close.bind(dom.window);
+  dom.window.close = () => {
+    dom.window.__agyPlus?.destroy?.();
+    close();
+  };
   return dom;
 }
 
@@ -412,6 +417,58 @@ test("bridge script resolves responses and rejects pending requests on reconnect
     const p2 = dom.window.agyPlusInvoke("/accounts/list", {});
     dom.window.eval(script);
     await assert.rejects(p2, /reconnected/i);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("preload installs before the parser creates html/head and survives login DOM mounting", async () => {
+  const dom = setupDom("", async () => ({ status: "ok", accounts: [] }));
+  try {
+    dom.window.__agyPlus.destroy();
+    delete dom.window.__agyPlus;
+    dom.window.document.documentElement.remove();
+    assert.doesNotThrow(() => dom.window.eval(rendererScript));
+    const html = dom.window.document.createElement("html");
+    html.innerHTML = `<head></head><body>${LOGIN_SCREEN_HTML}</body>`;
+    dom.window.document.appendChild(html);
+    await flush();
+    assert.ok(dom.window.document.querySelector("[data-agy-plus-login-rt]"));
+    assert.equal(dom.window.__agyPlus.health().ready, true);
+    assert.equal(dom.window.__agyPlus.health().observerReady, true);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("React removing only the injected account button repairs it without waiting for a reload", async () => {
+  const dom = setupDom(ACCOUNT_SETTINGS_SIGNED_IN_HTML, async () => ({ status: "ok", accounts: [] }));
+  try {
+    await flush();
+    const original = dom.window.document.querySelector("[data-agy-plus-switch-account]");
+    original.remove();
+    await flush();
+    const repaired = dom.window.document.querySelector("[data-agy-plus-switch-account]");
+    assert.ok(repaired);
+    assert.notEqual(repaired, original);
+    repaired.click();
+    await flush();
+    assert.ok(dom.window.document.getElementById("agy-plus-modal"));
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("replacing the document element reconnects observation and restores style and controls", async () => {
+  const dom = setupDom(LOGIN_SCREEN_HTML, async () => ({ status: "ok", accounts: [] }));
+  try {
+    await flush();
+    const html = dom.window.document.createElement("html");
+    html.innerHTML = `<head></head><body>${ACCOUNT_SETTINGS_SIGNED_OUT_HTML}</body>`;
+    dom.window.document.replaceChild(html, dom.window.document.documentElement);
+    await flush();
+    assert.ok(dom.window.document.querySelector("[data-agy-plus-settings-rt]"));
+    assert.equal(dom.window.__agyPlus.health().ready, true);
   } finally {
     dom.window.close();
   }

@@ -2,7 +2,7 @@
   "use strict";
   const String = window.String;
 
-  const VERSION = 1;
+  const VERSION = 2;
   const STYLE_ID = "agy-plus-style";
   const MODAL_ID = "agy-plus-modal";
   const LOGIN_RT_ATTR = "data-agy-plus-login-rt";
@@ -17,6 +17,7 @@
 
   const state = {
     observer: null,
+    destroyed: false,
     scanQueued: false,
     modal: null,
     opener: null,
@@ -85,6 +86,9 @@
 
   function installStyle() {
     if (document.getElementById(STYLE_ID)) return;
+    // New-document scripts run before the parser has created <html> or <head>.
+    // The document observer will retry when the head is mounted.
+    if (!document.head) return;
     const style = document.createElement("style");
     style.id = STYLE_ID;
     style.textContent = `
@@ -675,6 +679,7 @@
   }
 
   function runScan() {
+    installStyle();
     if (isRemoteWindow()) return;
     scanLoginScreen();
     scanAccountSettings();
@@ -682,17 +687,17 @@
 
   function mutationIsRelevant(records) {
     if (!records) return true;
-    const selector = ".entrance-auth-panel,#other-sign-in-options,.agy-card,button,h1,h2,h3";
+    const selector = `#${STYLE_ID},.entrance-auth-panel,#other-sign-in-options,.agy-card,button,h1,h2,h3`;
     return records.some((record) => {
       const target = record.target?.nodeType === 3 ? record.target.parentElement : record.target;
       if (isInsideOwnUi(target)) return false;
-      if (target?.nodeType === 1 && (target.matches?.(selector) || target.closest?.(selector))) {
+      if (target?.nodeType === 1 && (target.matches?.("html,head") || target.matches?.(selector) || target.closest?.(selector))) {
         return true;
       }
-      return Array.from(record.addedNodes || []).some((node) => {
+      return [...(record.addedNodes || []), ...(record.removedNodes || [])].some((node) => {
         if (node.nodeType !== 1 && node.nodeType !== 11) return false;
         if (node.nodeType === 1 && isInsideOwnUi(node)) return false;
-        return Boolean(node.matches?.(selector) || node.querySelector?.(selector));
+        return Boolean(node.matches?.("html,head") || node.matches?.(selector) || node.querySelector?.(selector));
       });
     });
   }
@@ -703,6 +708,7 @@
     state.scanQueued = true;
     queueMicrotask(() => {
       state.scanQueued = false;
+      if (state.destroyed) return;
       runScan();
     });
   }
@@ -1166,15 +1172,17 @@
   }
 
   function install() {
-    installStyle();
+    state.destroyed = false;
     if (!state.observer) {
       state.observer = new MutationObserver((records) => queueScan(records));
-      state.observer.observe(document.documentElement, {
-        childList: true,
-        subtree: true,
-        characterData: true,
-      });
     }
+    // Document remains stable across parser startup and documentElement replacement.
+    // Re-observing is idempotent and also repairs a disconnected observer on heartbeat.
+    state.observer.observe(document, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
     runScan();
     return health();
   }
@@ -1183,12 +1191,16 @@
     return {
       ready: document.getElementById(STYLE_ID) != null,
       observerReady: state.observer != null,
+      bridgeReady: typeof window.agyPlusInvoke === "function" &&
+        typeof window.agyPlusBridgeV1 === "function",
+      documentLoading: document.readyState === "loading",
       modalOpen: document.getElementById(MODAL_ID) != null,
       version: VERSION,
     };
   }
 
   function destroy() {
+    state.destroyed = true;
     closeModal();
     state.observer?.disconnect();
     state.observer = null;

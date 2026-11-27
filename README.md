@@ -32,7 +32,7 @@ npm run verify
 npm run build:mac
 ```
 
-构建产物：`target/release/agy-plus` 与 `target/portable/agy-plus-0.2.0-macos-arm64.tar.gz`。
+构建产物：`target/release/agy-plus` 与 `target/portable/agy-plus-0.2.1-macos-arm64.tar.gz`。
 - 手动启动：`open "macos/AGY Plus.app"` 或直接运行 `target/release/agy-plus`。
 - 可选登录自动接管（LaunchAgent，含 `ProcessType=Interactive` 与 `AbandonProcessGroup=true`）：`bash macos/install.sh`（卸载：`bash macos/uninstall.sh`）。
 
@@ -43,7 +43,7 @@ npm ci
 npm run build:win
 ```
 
-脚本自动进入已安装的 MSVC x64 Developer Shell 构建，产物位于 `target\x86_64-pc-windows-msvc\release\agy-plus.exe` 与 `target\portable\agy-plus-0.2.0-windows-x64.zip`。
+脚本自动进入已安装的 MSVC x64 Developer Shell 构建，产物位于 `target\x86_64-pc-windows-msvc\release\agy-plus.exe` 与 `target\portable\agy-plus-0.2.1-windows-x64.zip`。
 - 手动启动：直接运行 `agy-plus.exe`。
 - 可选登录自动接管（`HKCU\...\Run`）：`powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-windows-startup.ps1`（卸载加 `-Uninstall`）。
 

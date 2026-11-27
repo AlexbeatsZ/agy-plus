@@ -23,7 +23,7 @@ const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(45);
 const LIVENESS_INTERVAL: Duration = Duration::from_secs(5);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
-const HEARTBEAT_SCRIPT: &str = "(() => { const api = window.__agyPlus; const h = api?.health?.() || null; if (!h?.ready || !h?.observerReady) api?.install?.(); return api?.health?.() || null; })()";
+const HEARTBEAT_SCRIPT: &str = "window.__agyPlus?.install?.() || null";
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -239,6 +239,9 @@ async fn run_target_session_with_tuning(
     let mut next_id = 1_u64;
 
     command(&mut socket, &mut next_id, "Runtime.enable", json!({})).await?;
+    // Registration can acknowledge successfully while Page is disabled, yet
+    // Chromium will not execute the preloads on the next navigation.
+    command(&mut socket, &mut next_id, "Page.enable", json!({})).await?;
     let _ = command(
         &mut socket,
         &mut next_id,
@@ -280,7 +283,8 @@ async fn run_target_session_with_tuning(
 
     let bridge_script = browser_bridge_script();
     let mut new_registration_ids = Vec::new();
-    for script in [&bridge_script, RENDERER_SCRIPT] {
+    let renderer_script = scoped_script(RENDERER_SCRIPT);
+    for script in [&bridge_script, &renderer_script] {
         let registered = command(
             &mut socket,
             &mut next_id,
@@ -297,7 +301,7 @@ async fn run_target_session_with_tuning(
     }
 
     evaluate(&mut socket, &mut next_id, &bridge_script).await?;
-    evaluate(&mut socket, &mut next_id, RENDERER_SCRIPT).await?;
+    evaluate(&mut socket, &mut next_id, &renderer_script).await?;
     let reg_json = serde_json::to_string(&new_registration_ids)?;
     let _ = evaluate(
         &mut socket,
@@ -312,14 +316,7 @@ async fn run_target_session_with_tuning(
         "window.__agyPlus?.health?.() || null",
     )
     .await?;
-    let healthy = health
-        .pointer("/result/result/value")
-        .and_then(Value::as_object)
-        .is_some_and(|obj| {
-            obj.get("ready").and_then(Value::as_bool) == Some(true)
-                && obj.get("observerReady").and_then(Value::as_bool) == Some(true)
-        });
-    if !healthy {
+    if !injection_healthy(&health) {
         bail!("Renderer injection health check failed: {health}");
     }
     crate::runtime::append_log(
@@ -328,7 +325,7 @@ async fn run_target_session_with_tuning(
         json!({"targetId": target.id, "health": health.pointer("/result/result/value")}),
     );
 
-    let (responses_tx, mut responses_rx) = mpsc::unbounded_channel::<(String, Value)>();
+    let (responses_tx, mut responses_rx) = mpsc::unbounded_channel::<(String, u64, Value)>();
     let mut heartbeat = tokio::time::interval(tuning.heartbeat);
     let mut liveness = tokio::time::interval(tuning.liveness);
     let mut pending_heartbeat: Option<u64> = None;
@@ -346,9 +343,25 @@ async fn run_target_session_with_tuning(
                     && value.get("id").and_then(Value::as_u64) == pending_heartbeat
                 {
                     pending_heartbeat = None;
+                    // A CDP acknowledgement only proves the socket works. A missing renderer,
+                    // broken bridge or JS exception must end this session so the watchdog
+                    // reinstalls both scripts and bindings in the current document.
+                    if !injection_healthy(&value) {
+                        crate::runtime::append_log(
+                            service.paths(),
+                            "injection.health.failed",
+                            json!({"targetId": target.id}),
+                        );
+                        bail!("Renderer injection health lost; reconnecting");
+                    }
                 }
 
-                if value.get("method").and_then(Value::as_str) == Some("Runtime.bindingCalled") {
+                let method = value.get("method").and_then(Value::as_str);
+                if method == Some("Runtime.executionContextsCleared") {
+                    pending_heartbeat = None;
+                    heartbeat.reset_immediately();
+                }
+                if method == Some("Runtime.bindingCalled") {
                     let name = value.pointer("/params/name").and_then(Value::as_str);
                     if name != Some(BINDING_NAME) {
                         continue;
@@ -360,11 +373,14 @@ async fn run_target_session_with_tuning(
                     let Ok(request) = serde_json::from_str::<BridgeRequest>(raw) else {
                         continue;
                     };
+                    let Some(context_id) = value.pointer("/params/executionContextId").and_then(Value::as_u64) else {
+                        continue;
+                    };
                     let tx = responses_tx.clone();
                     let service = service.clone();
                     tokio::spawn(async move {
                         let result = service.handle(&request.path, request.payload).await;
-                        let _ = tx.send((request.id, result));
+                        let _ = tx.send((request.id, context_id, result));
                     });
                 } else if value.get("id").is_some()
                     && (value.get("error").is_some()
@@ -377,13 +393,13 @@ async fn run_target_session_with_tuning(
                     );
                 }
             }
-            Some((request_id, value)) = responses_rx.recv() => {
+            Some((request_id, context_id, value)) = responses_rx.recv() => {
                 let expression = format!(
                     "window.__agyPlusBridgeResolve?.({},{})",
                     serde_json::to_string(&request_id)?,
                     serde_json::to_string(&value)?
                 );
-                send_evaluate_async(&mut socket, &mut next_id, &expression).await?;
+                send_evaluate_in_context(&mut socket, &mut next_id, &expression, Some(context_id)).await?;
             }
             _ = liveness.tick() => {
                 if pending_heartbeat.is_some() && Instant::now() >= heartbeat_deadline {
@@ -410,10 +426,31 @@ async fn run_target_session_with_tuning(
 }
 
 pub fn browser_bridge_script() -> String {
-    BRIDGE_SCRIPT.replace(
+    scoped_script(&BRIDGE_SCRIPT.replace(
         BINDING_PLACEHOLDER,
         &serde_json::to_string(BINDING_NAME).expect("binding name is serializable"),
+    ))
+}
+
+fn scoped_script(source: &str) -> String {
+    // Preloads also run in child frames and survive navigation. Only install in
+    // the local Hub's top frame, never an OAuth page or embedded plugin.
+    format!(
+        "(() => {{ if (window !== window.top || !['http:', 'https:'].includes(location.protocol) || !['127.0.0.1', 'localhost'].includes(location.hostname) || !location.port) return; {source}\n }})()"
     )
+}
+
+fn injection_healthy(response: &Value) -> bool {
+    if response.get("error").is_some() || response.pointer("/result/exceptionDetails").is_some() {
+        return false;
+    }
+    let Some(health) = response.pointer("/result/result/value") else {
+        return false;
+    };
+    health.get("observerReady").and_then(Value::as_bool) == Some(true)
+        && health.get("bridgeReady").and_then(Value::as_bool) == Some(true)
+        && (health.get("ready").and_then(Value::as_bool) == Some(true)
+            || health.get("documentLoading").and_then(Value::as_bool) == Some(true))
 }
 
 async fn evaluate<S>(
@@ -481,15 +518,31 @@ async fn send_evaluate_async<S>(
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
+    send_evaluate_in_context(socket, next_id, expression, None).await
+}
+
+async fn send_evaluate_in_context<S>(
+    socket: &mut tokio_tungstenite::WebSocketStream<S>,
+    next_id: &mut u64,
+    expression: &str,
+    context_id: Option<u64>,
+) -> anyhow::Result<u64>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     let id = *next_id;
     *next_id += 1;
+    let mut params = json!({"expression": expression, "returnByValue": true});
+    if let Some(context_id) = context_id {
+        params["contextId"] = json!(context_id);
+    }
     write_message(
         socket,
         Message::Text(
             serde_json::to_string(&json!({
                 "id": id,
                 "method": "Runtime.evaluate",
-                "params": {"expression": expression, "returnByValue": true}
+                "params": params
             }))?
             .into(),
         ),
@@ -600,7 +653,7 @@ mod tests {
                         "result": {
                             "result": {
                                 "type": "object",
-                                "value": {"ready": true, "observerReady": true}
+                                "value": {"ready": true, "observerReady": true, "bridgeReady": true}
                             }
                         }
                     })
@@ -659,6 +712,7 @@ mod tests {
                 if expr.starts_with("window.__agyPlusBridgeResolve") {
                     assert!(expr.contains("req-list-1"));
                     assert!(expr.contains("\"status\":\"ok\""));
+                    assert_eq!(req.pointer("/params/contextId"), Some(&json!(42)));
                     socket.close(None).await.unwrap();
                     return;
                 }
@@ -671,7 +725,7 @@ mod tests {
                         "result": {
                             "result": {
                                 "type": "object",
-                                "value": {"ready": true, "observerReady": true}
+                                "value": {"ready": true, "observerReady": true, "bridgeReady": true}
                             }
                         }
                     })
@@ -687,6 +741,7 @@ mod tests {
                         "method": "Runtime.bindingCalled",
                         "params": {
                             "name": BINDING_NAME,
+                            "executionContextId": 42,
                             "payload": json!({"id": "req-list-1", "path": "/accounts/list", "payload": {}}).to_string()
                         }
                     });
@@ -721,5 +776,76 @@ mod tests {
         .await
         .unwrap();
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn acknowledged_but_unhealthy_heartbeat_ends_session_for_reinjection() {
+        for unhealthy in [
+            json!({"result": {"result": {"value": null}}}),
+            json!({"result": {"result": {"value": {"ready": true, "observerReady": true, "bridgeReady": false}}}}),
+            json!({"result": {"exceptionDetails": {"text": "Execution context was destroyed"}}}),
+            json!({"error": {"code": -32000, "message": "Cannot find context"}}),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                while let Some(Ok(Message::Text(text))) = socket.next().await {
+                    let request: Value = serde_json::from_str(text.as_str()).unwrap();
+                    let id = request["id"].clone();
+                    let mut response = if request
+                        .pointer("/params/expression")
+                        .and_then(Value::as_str)
+                        == Some(HEARTBEAT_SCRIPT)
+                    {
+                        unhealthy.clone()
+                    } else if request["method"] == "Page.addScriptToEvaluateOnNewDocument" {
+                        json!({"result": {"identifier": "reg-1"}})
+                    } else {
+                        json!({"result": {"result": {"value": {"ready": true, "observerReady": true, "bridgeReady": true}}}})
+                    };
+                    response["id"] = id;
+                    if socket
+                        .send(Message::Text(response.to_string().into()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let service = BridgeService::new(AppPaths {
+                home_dir: dir.path().join("home"),
+                state_dir: dir.path().join("state"),
+            });
+            let mut injected = target("https://127.0.0.1:54321/", "page");
+            injected.web_socket_debugger_url =
+                Some(format!("ws://127.0.0.1:{port}/devtools/page/1"));
+            let error = tokio::time::timeout(
+                Duration::from_secs(5),
+                run_target_session_with_tuning(&injected, service, SessionTuning::default()),
+            )
+            .await
+            .unwrap()
+            .expect_err("unhealthy acknowledgement must trigger reconnect");
+            assert!(error.to_string().contains("health lost"), "{error}");
+            server.abort();
+        }
+    }
+
+    #[test]
+    fn parser_startup_is_healthy_only_with_an_installed_observer_and_bridge() {
+        let response = json!({"result": {"result": {"value": {
+            "ready": false, "observerReady": true, "bridgeReady": true, "documentLoading": true
+        }}}});
+        assert!(injection_healthy(&response));
+        let mut missing_observer = response.clone();
+        missing_observer["result"]["result"]["value"]["observerReady"] = json!(false);
+        assert!(!injection_healthy(&missing_observer));
+        let mut ready_document = response;
+        ready_document["result"]["result"]["value"]["documentLoading"] = json!(false);
+        assert!(!injection_healthy(&ready_document));
     }
 }
